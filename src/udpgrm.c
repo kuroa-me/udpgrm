@@ -106,7 +106,6 @@ static void sockaddr_from_msg_value(struct sockaddr_storage *ss, struct msg_valu
 	}
 }
 
-
 static int handle_msg(void *_ctx, void *data, size_t data_sz)
 {
 	struct handle_msg_ctx *ctx = _ctx;
@@ -126,7 +125,8 @@ static int handle_msg(void *_ctx, void *data, size_t data_sz)
 
 	if (e->type == MSG_LOG) {
 		if (e->skey.family != 0) {
-			printf("%s %.*s", skey_sprint(&e->skey), (int)sizeof(e->log), (char *)&e->log);
+			printf("%s %.*s", skey_sprint(&e->skey), (int)sizeof(e->log),
+			       (char *)&e->log);
 		} else {
 			printf("%.*s", (int)sizeof(e->log), (char *)&e->log);
 		}
@@ -137,9 +137,9 @@ static int handle_msg(void *_ctx, void *data, size_t data_sz)
 		/*        e->cookie); */
 		int pidfd = pidfd_open(e->pid, 0);
 		if (pidfd < 0) {
-			printf("%s [!] Pid %d requested MSG_REGISTER_SOCKET, but have "
-			       "died since, ignoring\n",
-			       skey_sprint(&e->skey), e->pid);
+			printf("%s [!] Pid %d requested MSG_REGISTER_SOCKET, got %d, but "
+			       "have died since, ignoring\n",
+			       skey_sprint(&e->skey), e->pid, errno);
 			goto err;
 		}
 

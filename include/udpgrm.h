@@ -21,7 +21,8 @@ enum udp_grm_socket_opt {
 	UDP_GRM_SOCKET_GEN = 201,
 	UDP_GRM_DISSECTOR = 202,
 	UDP_GRM_FLOW_ASSURE = 203,
-	UDP_GRM_SOCKET_APP = 204
+	UDP_GRM_SOCKET_APP = 204,
+	UDP_GRM_UFRAG = 205,
 };
 
 enum udp_grm_dissector_type {
@@ -43,6 +44,9 @@ enum udp_grm_dissector_flags {
 
 #define MAX_BESPOKE_SNI 8
 #define BESPOKE_SNI_LEN 62
+
+// RFC 8839 specifies a maximum of 256 bytes, a bpf map is needed to hold that.
+#define MAX_UFRAG_LEN 20
 
 struct udp_grm_dissector {
 	uint32_t dissector_type;
@@ -75,6 +79,10 @@ struct udp_grm_socket_gen {
 	uint32_t socket_idx;
 	uint16_t grm_cookie; // Not to be confused with 64bit socket cookie
 	uint16_t _reserved;
+};
+
+struct udp_grm_ufrag {
+	uint8_t ufrag[MAX_UFRAG_LEN];
 };
 
 #endif

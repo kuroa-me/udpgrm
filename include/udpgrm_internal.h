@@ -19,7 +19,7 @@
 #include "udpgrm.h"
 
 #define _UDP_GRM_MIN 200
-#define _UDP_GRM_MAX 204
+#define _UDP_GRM_MAX 205
 
 /* Don't change without rethinking grm_cookie_pack/grm_cookie_unpack */
 #define MAX_SOCKETS_IN_GEN 256

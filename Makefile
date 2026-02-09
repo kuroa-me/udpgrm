@@ -9,7 +9,7 @@ endif
 
 
 CLANG_DIR?=
-CLANG_BIN?=$(CLANG_DIR)clang-18
+CLANG_BIN?=$(CLANG_DIR)clang-19
 
 HOST_ARCH       := $(shell uname -m)
 TARGET_ARCH     ?= $(HOST_ARCH)

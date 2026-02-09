@@ -1,0 +1,25 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**"
+            ],
+            "forcedInclude": [
+                "${workspaceFolder}/ebpf/ebpf.c"
+            ],
+            "compilerPath": "/usr/bin/clang",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-clang-x64",
+            "configurationProvider": "ms-vscode.makefile-tools",
+            "compileCommands": [
+                "${workspaceFolder}/.vscode/compile_commands.json"
+            ],
+            "defines": [
+                "_GNU_SOURCE"
+            ]
+        }
+    ],
+    "version": 4
+}

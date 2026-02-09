@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (c) 2025 Cloudflare, Inc.
-// Licensed under the GNU General Public License Version 2 found in the ebpf/LICENSE file or at:
+// Licensed under the GNU General Public License Version 2 found in the ebpf/LICENSE file
+// or at:
 //     https://opensource.org/license/gpl-2-0
 
-#define SEC_TO_NSEC(v) ((v)*1000000000ULL)
+#define SEC_TO_NSEC(v) ((v) * 1000000000ULL)
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 #define MAX_REUSEPORT_GROUPS 512
@@ -40,7 +41,7 @@
 		}                                                                        \
 	})
 
-#define log_printfs(_skey, fmt, args...)				\
+#define log_printfs(_skey, fmt, args...)                                                 \
 	({                                                                               \
 		static const char *___fmt = fmt;                                         \
 		unsigned long long ___param[___bpf_narg(args)];                          \
@@ -50,17 +51,17 @@
 				___bpf_fill(___param, args);                             \
 		_Pragma("GCC diagnostic pop")                                            \
                                                                                          \
-			struct msg_value *_e = bpf_ringbuf_reserve(                       \
+			struct msg_value *_e = bpf_ringbuf_reserve(                      \
 				&msg_rb, sizeof(struct msg_value), 0);                   \
-		if (_e != NULL) {					\
-			_e->skey = *(_skey);				\
-			long l = bpf_snprintf(&_e->log[0], sizeof(_e->log), ___fmt,        \
+		if (_e != NULL) {                                                        \
+			_e->skey = *(_skey);                                             \
+			long l = bpf_snprintf(&_e->log[0], sizeof(_e->log), ___fmt,      \
 					      ___param, sizeof(___param));               \
 			unsigned ll = offsetof(struct msg_value, log) + l;               \
 			if (ll > sizeof(struct msg_value))                               \
 				ll = sizeof(struct msg_value);                           \
-			bpf_ringbuf_output(&msg_rb, _e, ll, 0);                           \
-			bpf_ringbuf_discard(_e, 0);                                       \
+			bpf_ringbuf_output(&msg_rb, _e, ll, 0);                          \
+			bpf_ringbuf_discard(_e, 0);                                      \
 		}                                                                        \
 	})
 
@@ -115,6 +116,13 @@ struct {
 	__uint(key_size, sizeof(struct lru_key));
 	__uint(value_size, sizeof(struct lru_value));
 } lru_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MAX_SOCKETS_IN_GEN *MAX_GENS);
+	__type(key, struct ufrag);
+	__type(value, uint64_t); // we could use either socket or grm cookie here.
+} ufrag_cookie_map SEC(".maps");
 
 #define METRIC_INC(token) __sync_fetch_and_add(&state->token, 1ULL)
 

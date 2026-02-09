@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (c) 2025 Cloudflare, Inc.
-// Licensed under the GNU General Public License Version 2 found in the ebpf/LICENSE file or at:
+// Licensed under the GNU General Public License Version 2 found in the ebpf/LICENSE file
+// or at:
 //     https://opensource.org/license/gpl-2-0
 
 #include <linux/bpf.h>
@@ -172,8 +173,14 @@ __attribute__((noinline)) int dissector_cbpf(struct sk_reuseport_md *md,
 	return 0;
 }
 
+static int _flow_assure(struct reuseport_storage *state, uint64_t sock_cookie,
+			uint32_t hash);
+
 static int flow_assure(struct reuseport_storage *state, struct socket_storage *s,
-		       uint32_t hash);
+		       uint32_t hash)
+{
+	return _flow_assure(state, s->so_cookie, hash);
+}
 
 SEC("sk_reuseport")
 int udpgrm_reuseport_prog(struct sk_reuseport_md *md)
@@ -189,7 +196,7 @@ int udpgrm_reuseport_prog(struct sk_reuseport_md *md)
 	/* No way to retrieve netns cookie. */
 	uint64_t sock_cookie = -1;
 	uint32_t sock_gen = -1, sock_idx = -1;
-	uint8_t dcid_len = 0;
+	uint8_t dcid_len = 0; //? dcid_len was never used.
 	uint32_t hash = -1;
 	uint32_t app_idx = 0;
 	int r = 0;
@@ -207,6 +214,41 @@ int udpgrm_reuseport_prog(struct sk_reuseport_md *md)
 	case DISSECTOR_BESPOKE: {
 		uint16_t grm_cookie = 0;
 		r = dissector_cbpf(md, state, &grm_cookie, &app_idx);
+		// TODO: Find a good place to put this logic 8<
+		if (state->dis.bespoke_digest == 0x1CED) {
+			if (r == IERR_LOAD)
+				goto skb_load_bytes_error;
+			// We need the flow hash for both outcomes.
+			int _r = dissector_flow(md, &hash, state->random_id);
+			if (_r != 0)
+				goto skb_load_bytes_error;
+			if (r == IERR_BADRETURNVALUE)
+				// Ufrag missing or non-STUN. Use flow hash.
+				goto have_hash;
+			if (r == IERR_OK) {
+				// STUN with ufrag, use cookie and ensure flow now.
+				// Duplicate code from below 8<
+				r = grm_cookie_unpack(grm_cookie, &sock_gen, &sock_idx);
+				if (r == 0) {
+					sock_cookie = state->cookies[sock_gen % MAX_GENS]
+								    [sock_idx %
+								     MAX_SOCKETS_IN_GEN];
+				} else {
+					if (state->verbose)
+						log_printf(
+							"[#] cookie checksum fail. "
+							"Cookie "
+							"extracted by cBPF 0x%04x\n",
+							grm_cookie);
+					sock_cookie = -2ULL;
+				}
+				// >8 End of duplicate code
+				_flow_assure(state, sock_cookie, hash);
+				goto have_cookie;
+			}
+			goto cbpf_prog_error;
+		}
+		// >8 End of TODO
 		if (r == IERR_LOAD) {
 			goto skb_load_bytes_error;
 		} else if (r == IERR_BADRETURNVALUE) {
@@ -221,7 +263,8 @@ int udpgrm_reuseport_prog(struct sk_reuseport_md *md)
 			} else {
 				if (state->verbose)
 					log_printf(
-						"[#] cookie checksum fail. Cookie extracted by cBPF 0x%04x\n",
+						"[#] cookie checksum fail. Cookie "
+						"extracted by cBPF 0x%04x\n",
 						grm_cookie);
 				sock_cookie = -2ULL;
 			}
@@ -390,7 +433,7 @@ int udpgrm_reuseport_prog(struct sk_reuseport_md *md)
 }
 
 struct task_struct {
-	int pid;
+	int tgid;
 } __attribute__((preserve_access_index));
 
 int dissector_cmp(struct udp_grm_dissector *a, struct udp_grm_dissector *b)
@@ -408,6 +451,7 @@ union setsockopt_opts {
 	struct udp_grm_dissector dis;
 	struct udp_grm_working_gen wrk;
 	struct udp_grm_socket_gen sk;
+	struct udp_grm_ufrag uf;
 	struct sockaddr_in sin;
 	struct sockaddr_in6 sin6;
 	uint32_t value;
@@ -529,9 +573,9 @@ int udpgrm_setsockopt(struct bpf_sockopt *ctx)
 			event->app_working_gen = data->wrk.working_gen;
 			_skey_from_bpf_sock(&event->skey, ctx->sk);
 
-			log_printfs(&event->skey, "[+] setting working gen %d (old=%d) (app=%d)\n",
-				   data->wrk.working_gen, old,
-				   app_idx);
+			log_printfs(&event->skey,
+				    "[+] setting working gen %d (old=%d) (app=%d)\n",
+				    data->wrk.working_gen, old, app_idx);
 			bpf_ringbuf_submit(event, 0);
 		}
 
@@ -560,7 +604,7 @@ int udpgrm_setsockopt(struct bpf_sockopt *ctx)
 			s->sock_gen = data->sk.socket_gen;
 
 			event->type = MSG_REGISTER_SOCKET;
-			event->pid = ts->pid;
+			event->pid = ts->tgid;
 			event->socket_cookie = s->so_cookie;
 			event->socket_gen = data->sk.socket_gen;
 			event->socket_app = s->sock_app;
@@ -568,7 +612,7 @@ int udpgrm_setsockopt(struct bpf_sockopt *ctx)
 
 			log_printfs(&event->skey, "[+] registering socket ");
 			log_printf("so_cookie=0x%lx app=%d gen=%d pid=%d\n", s->so_cookie,
-				   s->sock_app, s->sock_gen, ts->pid);
+				   s->sock_app, s->sock_gen, ts->tgid);
 
 			bpf_ringbuf_submit(event, 0);
 		}
@@ -654,7 +698,7 @@ int udpgrm_setsockopt(struct bpf_sockopt *ctx)
 		_skey_from_bpf_sock(&event->skey, ctx->sk);
 
 		log_printfs(&event->skey, "[+] setting dissector type %d\n",
-			   DISSECTOR_TYPE(data->dis.dissector_type));
+			    DISSECTOR_TYPE(data->dis.dissector_type));
 		bpf_ringbuf_submit(event, 0);
 
 		ctx->optlen = -1;
@@ -707,6 +751,41 @@ int udpgrm_setsockopt(struct bpf_sockopt *ctx)
 			}
 			s->sock_app = data->value;
 		}
+		ctx->optlen = -1;
+		bpf_set_retval(0);
+		return 1;
+	}
+
+	if (ctx->optname == UDP_GRM_UFRAG) {
+		if (DISSECTOR_TYPE(state->dis.dissector_type) != DISSECTOR_BESPOKE) {
+			bpf_set_retval(-EPERM);
+			return 0;
+		}
+		if (state->dis.bespoke_digest != 0x1CED) {
+			bpf_set_retval(-EPERM);
+			return 0;
+		}
+		if (s->sock_idx == 0xffffffff) {
+			// Socket not yet registered, we need sock_idx.
+			bpf_set_retval(-EBADFD);
+			return 0;
+		}
+
+		uint8_t v[4];
+		grm_cookie_pack(s->sock_gen, s->sock_idx, v);
+
+		struct ufrag key = {};
+		memcpy(&key, data->uf.ufrag, MAX_UFRAG_LEN);
+
+		int r = bpf_map_update_elem(&ufrag_cookie_map, &key, v, BPF_ANY);
+		if (r != 0) {
+			log_printf("[!] Registering ufrag failed %d\n", r);
+		}
+
+		if (state->verbose)
+			log_printf("[D] registered ufrag=%s to so_cookie=0x%lx\n", key.u8,
+				   s->so_cookie);
+
 		ctx->optlen = -1;
 		bpf_set_retval(0);
 		return 1;
@@ -884,8 +963,8 @@ int _bpf_bind(struct bpf_sock_addr *ctx)
 	return 1;
 }
 
-static int flow_assure(struct reuseport_storage *state, struct socket_storage *s,
-		       uint32_t hash)
+static int _flow_assure(struct reuseport_storage *state, uint64_t so_cookie,
+			uint32_t hash)
 {
 	METRIC_INC(tx_total);
 
@@ -893,10 +972,9 @@ static int flow_assure(struct reuseport_storage *state, struct socket_storage *s
 	struct lru_value *value = bpf_map_lookup_elem(&lru_map, &key);
 	if (value == NULL) {
 		if (state->verbose)
-			log_printf("[ ] hash=#%x new so_cookie=0x%x\n", hash,
-				   s->so_cookie);
+			log_printf("[ ] hash=#%x new so_cookie=0x%x\n", hash, so_cookie);
 		struct lru_value val = {.last_tx_ns = bpf_ktime_get_ns(),
-					.cookie = s->so_cookie};
+					.cookie = so_cookie};
 		int r = bpf_map_update_elem(&lru_map, &key, &val, BPF_NOEXIST);
 		if (r == 0) {
 			METRIC_INC(tx_flow_create_ok);
@@ -914,11 +992,11 @@ static int flow_assure(struct reuseport_storage *state, struct socket_storage *s
 
 		if (state->verbose)
 			log_printf("[ ] hash=#%x confirmed so_cookie=0x%x\n", hash,
-				   s->so_cookie);
+				   so_cookie);
 		uint64_t now = bpf_ktime_get_ns();
 		if (now - value->last_tx_ns <= SEC_TO_NSEC(flow_entry_timeout_sec)) {
 			// Not expired
-			if (value->cookie == s->so_cookie) {
+			if (value->cookie == so_cookie) {
 				METRIC_INC(tx_flow_update_ok);
 				value->last_tx_ns = now;
 			} else {
@@ -934,7 +1012,7 @@ static int flow_assure(struct reuseport_storage *state, struct socket_storage *s
 			// Attempt to set memory barrier. First
 			// timestamp, then cookie.
 			asm volatile("" ::: "memory");
-			value->cookie = s->so_cookie;
+			value->cookie = so_cookie;
 		}
 	}
 	return 1;

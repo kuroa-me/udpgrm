@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (c) 2025 Cloudflare, Inc.
-// Licensed under the GNU General Public License Version 2 found in the ebpf/LICENSE file or at:
+// Licensed under the GNU General Public License Version 2 found in the ebpf/LICENSE file
+// or at:
 //     https://opensource.org/license/gpl-2-0
 
 #include "ebpf_quic.c"
+#include "ebpf_ice.c"
 
 /* Technically it's 26: 1 hdr, 4 version, 1 dcid len, 20 dcid */
 #define MIN_QUIC_LEN 32
@@ -217,6 +219,57 @@ static int run_0xDEAD(struct sk_reuseport_md *md, struct reuseport_storage *stat
 	return IERR_OK;
 }
 
+static int run_0x1CED(struct sk_reuseport_md *md, struct reuseport_storage *state,
+		      int *retval)
+{
+	if (state == NULL || retval == NULL)
+		return IERR_SANITY;
+	const uint8_t verbose = state->verbose;
+
+	struct ufrag ufrag = {};
+	size_t ufrag_len = 0;
+
+	/* Three types of results:
+	 *  - negtaive means hard error
+	 *  - zero AND ufrag means ufrag found
+	 *  - zero AND !ufrag means non-STUN packet
+	 */
+	int r = parse_ice(md, &ufrag, &ufrag_len);
+	if (r != IERR_OK) {
+		log_printf("[ ] ICE parse failed hard err=%d\n", r);
+		return r;
+	}
+
+	if (r == IERR_OK && ufrag_len) {
+		if (verbose) {
+			log_printf("[D] Ufrag len %d: %s\n", ufrag_len, ufrag.u8);
+		}
+	} else if (r == IERR_OK) {
+		if (verbose)
+			log_printf("[D] Not a STUN-ICE packet\n");
+	} else {
+		if (verbose)
+			log_printf("[D] ICE ufrag extraction failed %d\n", r);
+	}
+
+	/* TODO: Change to test ufrag buffer from ufrag_len if we decide to move ufrag out
+	 * of stack. */
+	if (ufrag_len) {
+		uint64_t *cookie = bpf_map_lookup_elem(&ufrag_cookie_map, &ufrag);
+		if (cookie != NULL) {
+			if (verbose)
+				log_printf("[D] cookie by ufrag %16llx\n", *cookie);
+			*retval = *cookie;
+			return IERR_OK;
+		}
+	}
+
+	if (verbose)
+		log_printf("[D] Ufrag not there, fallback to flow\n");
+	*retval = 0x80000000ULL | 0x0;
+	return IERR_OK;
+}
+
 static int run_bespoke_by_digest(struct sk_reuseport_md *md, uint32_t bespoke_digest,
 				 struct reuseport_storage *state, int *retval)
 {
@@ -224,6 +277,9 @@ static int run_bespoke_by_digest(struct sk_reuseport_md *md, uint32_t bespoke_di
 	switch (bespoke_digest) {
 	case 0xDEAD: {
 		return run_0xDEAD(md, state, retval);
+	}
+	case 0x1CED: {
+		return run_0x1CED(md, state, retval);
 	}
 	}
 
